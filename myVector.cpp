@@ -1,7 +1,9 @@
+# if 1
 #include <iostream>
 using std::cout;
 using std::endl;
 
+int cnt = 0;
 
 /*
  * 容器的空间配置器 allocator
@@ -79,7 +81,7 @@ public:                        // 默认形参     构造函数:Allocator<T>()
         _last = _first + len;
     }
 
-    vector<T>& operator=(const vector<T,Alloc>& rhs)  //  拷贝赋值
+    vector<T,Alloc>& operator=(const vector<T,Alloc>& rhs)  //  拷贝赋值
     {
         if (this == &rhs)      //  与拷贝构造区别：避免自赋值
             return *this;
@@ -118,6 +120,7 @@ public:                        // 默认形参     构造函数:Allocator<T>()
     {
         if(empty())
             return ;
+        verify(_last-1,_last);  //  检查删除元素后，有哪些迭代器失效    _last-1：最后一个元素。有对应迭代器 _last：后继位置，有对应迭代器
 //        --_last;        //  只移动指针,并没有析构元素,也没有释放元素管理的内存。
         _allocator.destroy(--_last);    //  不仅移动指针 还需要析构元素s
     }
@@ -142,36 +145,142 @@ public:                        // 默认形参     构造函数:Allocator<T>()
             throw "OutOfRange";
         return _first[index];
     }
+
+
     //  实现迭代器
     //  迭代器一般实现成容器的嵌套类型
     class iterator  //  迭代器就是包装了遍历方法(++)的一个指针
     {
     public:
-        iterator(T *p = nullptr)
-            :_ptr(p){}
+        friend class vector<T,Alloc> ;
+        //  产生迭代器对象 自动将自己加入迭代器链表
+        iterator(vector<T,Alloc> *pvec , T *p = nullptr)
+            :_pVec(pvec),_ptr(p)
+        {
+            cout<<cnt++<<endl;
+            //  链表头插法                       节点内容    节点指向
+            Iterator_Base *ib = new Iterator_Base(this,_pVec->_head._next);
+            _pVec->_head._next = ib;        //  指针ib是局部变量，会被销毁无所谓。因为ib指向的内存是new出来的啊哈哈哈。不会被销毁的。
+        }
         bool operator!=(const iterator& iter)
         {
+            //  _pVec == nullptr 代表迭代器失效
+            //  首先判断是否是同一容器的迭代器（比较迭代器指向容器的地址是否相同）
+            if(_pVec == nullptr || _pVec != iter._pVec)
+            {
+                throw "iterator incompatable!";
+            }
             return _ptr!=iter._ptr;
         }
-        iterator& operator++()
+        void operator++()
         {
+            //  _pVec == nullptr 迭代器失效
+            if(_pVec==nullptr)
+            {
+                throw "iterator inValid";
+            }
             _ptr++;
-            return *this;
         }
-        T& operator*(){ return *_ptr; }
+        T& operator*()
+        {
+            //  检查迭代器失效
+            if(_pVec==nullptr)
+            {
+                throw "iterator inValid";
+            }
+            return *_ptr;
+        }
         const T& operator*() const{return *_ptr;}
+        ~iterator()
+        {
+            cout<<"hh"<<endl;
+        }
     private:
+        //  指向元素
         T *_ptr;
+        //  指明是哪个容器的迭代器 T和Alloc都是已知的（外层vector就确定了） 因为同一迭代器的比较才有效
+        vector<T,Alloc> *_pVec;     //  迭代器是否有效标志
     };
-    //  需要给容器提供begin end方法
-    iterator begin(){return iterator(_first);}
-    iterator end(){return iterator(_last);}
+
+    //  容器需要提供begin end方法
+    iterator begin(){return iterator(this , _first);}
+    iterator end(){return iterator(this , _last);}
+
+    iterator insert(iterator it,const T &val)
+    {
+        verify(it._ptr-1,_last);    //  [it._ptr , last]的迭代器 如果存在，都要失效
+        T *p = _last;   //  p是指针 不是迭代器
+        while(p > it._ptr)
+        {
+            _allocator.construct(p,*(p-1));
+            _allocator.destroy(p-1);
+            --p;
+        }
+        _allocator.construct(p,val);    //  插入
+        ++_last;
+        return iterator(this,p);
+    }
+
+    iterator erase(iterator iter)
+    {
+        verify(iter._ptr-1,_last);
+        T *p = iter._ptr;
+        while(p < _last-1)
+        {
+            _allocator.destroy(p);
+            _allocator.construct(p,*(p+1));
+            ++p;
+        }
+        _allocator.destroy(p);
+        _last--;
+        return iterator(this,iter._ptr);
+    }
+
 
 private:
     T * _first; //  指向数组起始位置
     T * _last;  //  指向数组中有效元素的后继位置
     T * _end;   //  指向数组空间的后继位置
     Alloc _allocator;   // 空间配置器对象
+
+    //  为应对迭代器失效 增加代码
+
+    //  用一个链表来维护每个迭代器之间的顺序（可以当成是一个用来维护（装载）迭代器的容器
+    //  迭代器节点 _cur指向迭代器 _next指向下一个iterator_base节点
+    struct Iterator_Base
+    {
+        Iterator_Base(iterator *c= nullptr,Iterator_Base *ne = nullptr)
+            :_cur(c),_next(ne){}
+        iterator *_cur;
+        Iterator_Base *_next;
+    };
+    Iterator_Base _head;    //  一个容器只有一个迭代器头节点
+
+    //  检查
+    //  将(first,last]之间的元素，如果存在对应的迭代器，那么都要置为失效。并将维护他们的节点从链表中移除。
+    //  遍历链表
+    void verify(T* first , T* last)
+    {
+        Iterator_Base *pre = &this->_head;   //  头节点
+        Iterator_Base *it = this->_head._next;   //  第一个有效节点
+        while(it!=nullptr)
+        {   //  it 节点 _cur 迭代器 _ptr 指向的元素
+            if(it->_cur->_ptr > first && it->_cur->_ptr <= last)
+            {
+                //  标记迭代器失效 ：iterator持有的_pVec = nullptr
+                it->_cur->_pVec = nullptr;
+                pre->_next = it->_next;
+                delete it;          //  delete掉用于维护迭代器的节点
+                it = pre->_next;
+            }
+            else
+            {
+                pre = it;
+                it = it->_next;
+            }
+        }
+    }
+
     //  容器的二倍扩容操作
     void expand()
     {
@@ -202,51 +311,77 @@ private:
 };
 
 
+//  测试代码
+
+#if 1
 int main()
 {
     vector<int> vec;
-    for(int i=0;i<20;++i) vec.push_back(rand()%20);
-    for(vector<int>::iterator iter = vec.begin();iter!=vec.end();++iter)
-    {
-        cout<<*iter<<" ";
-    }
-    cout<<endl;
+    for(int i=0;i<3;++i) vec.push_back(rand()%20);
+//    vector<int>::iterator it(Allocator<int>);
+//    it = vec.begin(); 压根没有赋值函数
+//    int i = 0;
+//    vector<int>::iterator iter1 = vec.end();    //  end() 产生迭代器 迭代器加入链表
+//    cout<<"!"<<endl;
+//    vec.pop_back();
+//    cout<<"?"<<endl;
+//    vector<int>::iterator iter2 = vec.end();
+//    cout<< (iter1!=iter2) <<endl;
 
-    for(int x:vec)
-    {
-        cout<<x<<' ';
-    }
-    cout<<endl;
+//  每次调用end() 都会新产生一个迭代器（虽然他们要指向的位置是一致的，但是还是会产生） 也就是说 迭代器链表中会有很多指向位置相同的迭代器节点(*_cur)
+//    for(vector<int>::iterator iter = vec.begin();iter!=vec.end();++iter)
+//    {
+//        ++i;
+//    }
+//    cout<<"-----------------------------"<<endl;
+//    cout<<endl;
 }
+#endif
 
 
 # if 0
-class Test
-{
-public:
-    Test(){cout<<"Test()"<<endl;}
-    ~Test(){cout<<"~Test()"<<endl;}
-    Test(const Test& t)
-    {
-        cout<<"Test(const Test& t)"<<endl;
+int main() {
+    vector<int> vec(40);
+    for (int i = 0; i < 20; ++i) {
+        vec.push_back(rand() % 100 + 1);
     }
-    Test& operator=(const Test& t)
-    {
-        cout<<"Test& operator="<<endl;
-        return *this;
-    }
-};
 
-int main()
-{
-    Test t1,t2,t3;
-    cout<<"----------------"<<endl;
-    vector<Test> v;         //  只开辟了空间 没有构造对象
-    v.push_back(t1);    //  Test(const Test& )
-    v.push_back(t2);
-    v.push_back(t3);
-    cout<<"----------------"<<endl;
-    v.pop_back();           //  调用析构 不是释放内存
-    cout<<"----------------"<<endl;
+    auto it = vec.begin();
+    while (it != vec.end()) {
+        if (*it % 2 == 0) {
+            // 迭代器失效的问题，第一次调用erase以后，迭代器it就失效了
+            it = vec.erase(it); // insert(it, val)   erase(it)
+        } else {
+            ++it;
+        }
+    }
+
+    for (int v: vec) {
+        cout << v << " ";
+    }
+    cout << endl;
+}
+
+#endif
+
+# if 0
+
+int main() {
+    vector<int> v;
+    for(int i=0;i<3;++i) v.push_back(rand()%20);
+    for(int x:v) cout<<x<<" ";
+    cout<<endl;
+
+    auto it = v.begin();
+    v.insert(it,*it-1);     // insert:当前位置增加新元素，原元素依次向后移动
+    ++it;
+
+    for(int x:v) cout<<x<<" ";
+    cout<<endl;
+    std::cout << "Hello, World!" << std::endl;
+
+    return 0;
 }
 #endif
+
+
