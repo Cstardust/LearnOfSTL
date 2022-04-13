@@ -26,12 +26,18 @@ struct Allocator
         free(p);
     }
 
+    template<typename ...Ty>    //  不定个数参数
+    void construct(T *p,Ty&&... val)    //  引用折叠
+    {
+        new (p) T(std::forward<Ty>(val)...);    //  ...不定参数+完美转发 传入相应构造函数
+    }
+    /*
     template<typename Ty>
     void construct(T* p, Ty&& val)
     {
         new (p) T(std::forward<Ty>(val));
     }
-
+    */
     /*
     void construct(T* p, const T& val)   //  负责对象构造(在已有的内存上)
     {
@@ -122,6 +128,17 @@ public:                        // 默认形参     构造函数:Allocator<T>()
         _end = _first + sz;
         return *this;
     }
+
+
+    //  emplace_back实现 引用折叠 + forward万能转发 + 不定模板参数
+    //  emplace实现原地构造，避免临时量的产生：其实就是把原本要构造临时量对象的参数直接传进来，直接在vector容器的内存上定位new，
+    //  即调用相应构造函数，而不是先构造临时量对象、传入临时量对象，再在vector容器的内存上调用拷贝构造。从而避免一个临时对象的拷贝和析构
+    template<typename ...Ty>    //  不定模板参数 ...代表有很多模板参数
+    void emplace_back(Ty&&... args)
+    {
+        this->_allocator.construct(_last++,std::forward<Ty>(args)...);  //  ...代表不定个数的参数
+    }
+
 
     //  采用引用折叠 + forward完美转发
     //  引用折叠：推导出val到底是右值引用还是左值引用。使得函数可以同时接收左值引用和右值引用。
