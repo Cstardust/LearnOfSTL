@@ -26,10 +26,27 @@ struct Allocator
         free(p);
     }
 
-    void construct(T *p,const T& val)   //  负责对象构造(在已有的内存上)
+    template<typename Ty>
+    void construct(T* p, Ty&& val)
+    {
+        new (p) T(std::forward<Ty>(val));
+    }
+
+    /*
+    void construct(T* p, const T& val)   //  负责对象构造(在已有的内存上)
     {
         new (p) T(val);     //  定位new  在p指向的内存上构造(拷贝构造)
     }
+    void construct(T* p, T&& rval)   //  参数val匹配右值
+    {
+        //  在p处定位new 调用T的拷贝构造函数。
+        //  rval这个右值引用变量本身为左值；但是他所引用的那个变量val是个右值。因此我们要通过mover(val)来实现类型的转换
+        //  move实现的是语法层面的转换，告诉编译器rval是个右值，让他匹配右值拷贝构造函数。并没有对rval本身内存做出什么更改的事情
+        // 只是改变了语法层面的类型，为了让编译器识别出他（所引用的）是个右值
+        //  因为val为右值，因此调用拷贝构造函数时，匹配的就是T(&&)
+        new (p) T(std::move(rval)); 
+    }
+    */
 
     void destroy(T *p)      //  负责对象析构
     {
@@ -106,13 +123,38 @@ public:                        // 默认形参     构造函数:Allocator<T>()
         return *this;
     }
 
+    //  采用引用折叠 + forward完美转发
+    //  引用折叠：推导出val到底是右值引用还是左值引用。使得函数可以同时接收左值引用和右值引用。
+    //  forward：传参时保留val他（所引用的）到底是一个左值还是右值的信息，即保留引用的类型。
+    //  避免左值引用和右值引用变量本身都是左值而失去左右值信息，那样传参就只能传给左值。
+    template<typename Ty>
+    void push_back(Ty&& val)        //  CMyString&& + && -》 CMyString&& ; CMyString& + && -> CMyString&
+    {
+        if (full())
+            expand();
+        _allocator.construct(_last++, std::forward<Ty>(val));
+    }
+    //  push_back需要写两个 但是核心只有参数列表不同，右值还需要通过move来表示。不同也只是为了向下调用时调用到与左/友值匹配的函数。
+    /*
     void push_back(const T& val)
     {
-        if(full())
+        if (full())
             expand();
-//        *_last++ = val;     //  元素的operator=
-        _allocator.construct(_last++,val);
+        //        *_last++ = val;     //  元素的operator=
+        _allocator.construct(_last++, val);
     }
+
+    //  push_back(&&) -> construct(&&) -> new T(&&)（也就是调用 类型的右值拷贝构造，如CMyString(&&))
+    //  传入的实参为右值时（如CMyString("aa");会匹配到这里)
+    //  push_back了之后，容器里装的对象就和push_back左值一样。后续对于容器的操作也一样.
+    void push_back(T&& val)     //  push_back右值
+    {
+        if (full())
+            expand();
+        //  因为右值变量本身是左值，因此要move一下，让编译器识别他是右值。
+        _allocator.construct(_last++, std::move(val));  
+    }
+    */
 
     //  需要析构对象，并且要把析构对象和释放内存的操作分离开
     void pop_back()
